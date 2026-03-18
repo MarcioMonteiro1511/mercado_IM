@@ -8,7 +8,7 @@ app.use(express.json({ limit: "10mb" }));
 
 const db = new sqlite3.Database("banco.db");
 
-// 🔹 CRIAR TABELAS
+// 📦 BANCO
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,13 +42,12 @@ db.serialize(() => {
     )`);
 });
 
-// 🔐 CRIAR ADMIN PADRÃO
-const criarAdmin = async () => {
+// 🔐 ADMIN PADRÃO
+(async () => {
     const senhaHash = await bcrypt.hash("123", 10);
     db.run(`INSERT OR IGNORE INTO admins (nome,email,senha)
         VALUES ('Admin','admin@email.com',?)`, [senhaHash]);
-};
-criarAdmin();
+})();
 
 // 🔐 LOGIN
 app.post("/login", (req, res) => {
@@ -65,7 +64,7 @@ app.post("/login", (req, res) => {
     });
 });
 
-// 🔐 MIDDLEWARE
+// 🔐 AUTH
 function auth(req, res, next) {
     const token = req.headers.authorization;
     if (!token) return res.sendStatus(401);
@@ -115,7 +114,7 @@ app.post("/entrada", auth, (req, res) => {
     res.send("OK");
 });
 
-// 🔻 SAÍDA (com controle mensal)
+// 🔻 SAÍDA COM CONTROLE MENSAL
 app.post("/saida", auth, (req, res) => {
     const { cliente_id, produto_id, quantidade } = req.body;
 
@@ -144,116 +143,148 @@ app.post("/saida", auth, (req, res) => {
     });
 });
 
-// 📊 RELATÓRIO
-app.get("/relatorio/:id", auth, (req, res) => {
-    db.all("SELECT * FROM movimentacoes WHERE cliente_id=?",
-        [req.params.id],
-        (err, rows) => res.json(rows));
+// 📊 DASHBOARD DADOS
+app.get("/dashboard", auth, (req, res) => {
+    db.all("SELECT nome, quantidade FROM produtos", [], (err, produtos) => {
+        db.get("SELECT COUNT(*) as clientes FROM clientes", [], (e, c) => {
+            db.get("SELECT COUNT(*) as produtos FROM produtos", [], (e2, p) => {
+                res.json({
+                    produtos,
+                    totalClientes: c.clientes,
+                    totalProdutos: p.produtos
+                });
+            });
+        });
+    });
 });
 
-// 🌐 FRONTEND BONITO
+// 🌐 FRONTEND PROFISSIONAL
 app.get("/", (req, res) => {
 res.send(`
 <!DOCTYPE html>
 <html>
 <head>
 <title>Supermercado Solidário</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <style>
-body { font-family: Arial; background:#eef2f3; }
-.card { background:#fff; padding:20px; margin:10px; border-radius:10px; }
-input,button,select { padding:10px; margin:5px; width:100%; }
+body { margin:0; font-family:Arial; background:#f1f3f6; }
+.sidebar { width:220px; height:100vh; background:#2c3e50; position:fixed; color:#fff; padding:20px; }
+.sidebar h2 { color:#2ecc71; }
+.sidebar button { width:100%; margin:10px 0; padding:10px; border:none; background:#34495e; color:#fff; }
+.main { margin-left:240px; padding:20px; }
+.card { background:#fff; padding:20px; border-radius:10px; margin-bottom:20px; }
+.grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:20px; }
+.stat { font-size:22px; font-weight:bold; color:#27ae60; }
+input, select, button { width:100%; padding:10px; margin:5px 0; }
 button { background:#27ae60; color:#fff; border:none; }
+img { width:50px; border-radius:5px; }
 </style>
 </head>
+
 <body>
 
-<div class="card" id="login">
-<h2>Login</h2>
-<input id="email" placeholder="Email">
-<input id="senha" type="password" placeholder="Senha">
-<button onclick="login()">Entrar</button>
+<div class="sidebar">
+    <h2>IM Solidário</h2>
+    <button onclick="show('dashboard')">Dashboard</button>
+    <button onclick="show('clientes')">Clientes</button>
+    <button onclick="show('produtos')">Produtos</button>
+    <button onclick="show('mov')">Movimentação</button>
 </div>
 
-<div id="app" style="display:none">
-
+<div id="login" class="main">
 <div class="card">
-<h3>Clientes</h3>
+<h2>Login</h2>
+<input id="email" placeholder="Email">
+<input id="senha" type="password">
+<button onclick="login()">Entrar</button>
+</div>
+</div>
+
+<div id="app" class="main" style="display:none">
+
+<div id="dashboardTela" class="tela">
+<div class="grid">
+<div class="card"><div>Total Clientes</div><div id="c" class="stat"></div></div>
+<div class="card"><div>Total Produtos</div><div id="p" class="stat"></div></div>
+</div>
+<div class="card"><canvas id="grafico"></canvas></div>
+</div>
+
+<div id="clientesTela" class="tela" style="display:none">
+<div class="card">
 <input id="cnome" placeholder="Nome">
 <input id="ccpf" placeholder="CPF">
 <input type="file" id="cfoto">
 <button onclick="addCliente()">Salvar</button>
 <select id="clientes"></select>
 </div>
+</div>
 
+<div id="produtosTela" class="tela" style="display:none">
 <div class="card">
-<h3>Produtos</h3>
 <input id="pnome" placeholder="Produto">
-<input id="pqtd" type="number" placeholder="Quantidade">
+<input id="pqtd" type="number">
 <input type="file" id="pfoto">
 <button onclick="addProduto()">Salvar</button>
 <select id="produtos"></select>
 </div>
-
-<div class="card">
-<h3>Movimentação</h3>
-<input id="qtd" type="number" placeholder="Quantidade">
-<button onclick="entrada()">Entrada</button>
-<button onclick="saida()">Saída</button>
 </div>
 
+<div id="movTela" class="tela" style="display:none">
 <div class="card">
-<h3>Comprovante</h3>
+<input id="qtd" type="number">
+<button onclick="entrada()">Entrada</button>
+<button onclick="saida()">Saída</button>
 <button onclick="window.print()">Imprimir</button>
+</div>
 </div>
 
 </div>
 
 <script>
-let token = "";
+let token="";
+
+function show(t){
+    document.querySelectorAll(".tela").forEach(x=>x.style.display="none");
+    document.getElementById(t+"Tela").style.display="block";
+}
 
 async function login(){
-    let res = await fetch("/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-            email:email.value,
-            senha:senha.value
-        })
-    });
-
+    let res = await fetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({email:email.value,senha:senha.value})});
     let data = await res.json();
-    token = data.token;
-
-    if(token){
-        login.style.display="none";
-        app.style.display="block";
-        load();
-    } else {
-        alert("Erro login");
-    }
+    token=data.token;
+    if(token){ login.style.display="none"; app.style.display="block"; load(); }
 }
 
 async function load(){
-    let c = await fetch("/clientes",{headers:{authorization:token}});
-    let clientes = await c.json();
+    let d = await fetch("/dashboard",{headers:{authorization:token}});
+    let data = await d.json();
 
-    let p = await fetch("/produtos",{headers:{authorization:token}});
-    let produtos = await p.json();
+    c.innerText = data.totalClientes;
+    p.innerText = data.totalProdutos;
 
-    clientes.forEach(x=>{
-        document.getElementById("clientes").innerHTML += 
-        \`<option value="\${x.id}">\${x.nome}</option>\`;
+    new Chart(grafico,{
+        type:"bar",
+        data:{
+            labels:data.produtos.map(x=>x.nome),
+            datasets:[{label:"Estoque",data:data.produtos.map(x=>x.quantidade)}]
+        }
     });
 
-    produtos.forEach(x=>{
-        document.getElementById("produtos").innerHTML += 
-        \`<option value="\${x.id}">\${x.nome}</option>\`;
-    });
+    let cli = await fetch("/clientes",{headers:{authorization:token}});
+    let cl = await cli.json();
+    cl.forEach(x=>clientes.innerHTML+=\`<option value="\${x.id}">\${x.nome}</option>\`);
+
+    let pr = await fetch("/produtos",{headers:{authorization:token}});
+    let pl = await pr.json();
+    pl.forEach(x=>produtos.innerHTML+=\`<option value="\${x.id}">\${x.nome}</option>\`);
 }
 
 function fileBase64(input){
     return new Promise(r=>{
-        let reader = new FileReader();
+        let reader=new FileReader();
         reader.onload=()=>r(reader.result);
         reader.readAsDataURL(input.files[0]);
     });
@@ -261,47 +292,26 @@ function fileBase64(input){
 
 async function addCliente(){
     let foto = await fileBase64(cfoto);
-
-    await fetch("/clientes",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({nome:cnome.value,cpf:ccpf.value,foto})
-    });
+    await fetch("/clientes",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({nome:cnome.value,cpf:ccpf.value,foto})});
     location.reload();
 }
 
 async function addProduto(){
     let foto = await fileBase64(pfoto);
-
-    await fetch("/produtos",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value,foto})
-    });
+    await fetch("/produtos",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value,foto})});
     location.reload();
 }
 
 function entrada(){
-    fetch("/entrada",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({
-            produto_id:produtos.value,
-            quantidade:qtd.value
-        })
-    });
+    fetch("/entrada",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({produto_id:produtos.value,quantidade:qtd.value})});
 }
 
 function saida(){
-    fetch("/saida",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({
-            cliente_id:clientes.value,
-            produto_id:produtos.value,
-            quantidade:qtd.value
-        })
-    });
+    fetch("/saida",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({cliente_id:clientes.value,produto_id:produtos.value,quantidade:qtd.value})});
 }
 </script>
 
@@ -310,4 +320,4 @@ function saida(){
 `);
 });
 
-app.listen(3000, () => console.log("Rodando em http://localhost:3000"));
+app.listen(3000, () => console.log("🚀 Rodando em http://localhost:3000"));
