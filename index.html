@@ -1,162 +1,313 @@
+const express = require("express");
+const sqlite3 = require("sqlite3").verbose();
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+
+const app = express();
+app.use(express.json({ limit: "10mb" }));
+
+const db = new sqlite3.Database("banco.db");
+
+// 🔹 CRIAR TABELAS
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        email TEXT UNIQUE,
+        senha TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        cpf TEXT,
+        foto TEXT,
+        limite_mensal INTEGER DEFAULT 10
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS produtos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        quantidade INTEGER,
+        foto TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS movimentacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER,
+        produto_id INTEGER,
+        tipo TEXT,
+        quantidade INTEGER,
+        data DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+});
+
+// 🔐 CRIAR ADMIN PADRÃO
+const criarAdmin = async () => {
+    const senhaHash = await bcrypt.hash("123", 10);
+    db.run(`INSERT OR IGNORE INTO admins (nome,email,senha)
+        VALUES ('Admin','admin@email.com',?)`, [senhaHash]);
+};
+criarAdmin();
+
+// 🔐 LOGIN
+app.post("/login", (req, res) => {
+    const { email, senha } = req.body;
+
+    db.get("SELECT * FROM admins WHERE email=?", [email], async (err, user) => {
+        if (!user) return res.json({ erro: "Usuário não encontrado" });
+
+        const ok = await bcrypt.compare(senha, user.senha);
+        if (!ok) return res.json({ erro: "Senha inválida" });
+
+        const token = jwt.sign({ id: user.id }, "segredo");
+        res.json({ token });
+    });
+});
+
+// 🔐 MIDDLEWARE
+function auth(req, res, next) {
+    const token = req.headers.authorization;
+    if (!token) return res.sendStatus(401);
+
+    try {
+        jwt.verify(token, "segredo");
+        next();
+    } catch {
+        res.sendStatus(403);
+    }
+}
+
+// 👤 CLIENTES
+app.post("/clientes", auth, (req, res) => {
+    const { nome, cpf, foto } = req.body;
+    db.run("INSERT INTO clientes (nome,cpf,foto) VALUES (?,?,?)",
+        [nome, cpf, foto],
+        () => res.send("OK"));
+});
+
+app.get("/clientes", auth, (req, res) => {
+    db.all("SELECT * FROM clientes", [], (err, rows) => res.json(rows));
+});
+
+// 📦 PRODUTOS
+app.post("/produtos", auth, (req, res) => {
+    const { nome, quantidade, foto } = req.body;
+    db.run("INSERT INTO produtos (nome,quantidade,foto) VALUES (?,?,?)",
+        [nome, quantidade, foto],
+        () => res.send("OK"));
+});
+
+app.get("/produtos", auth, (req, res) => {
+    db.all("SELECT * FROM produtos", [], (err, rows) => res.json(rows));
+});
+
+// 🔄 ENTRADA
+app.post("/entrada", auth, (req, res) => {
+    const { produto_id, quantidade } = req.body;
+
+    db.run("UPDATE produtos SET quantidade = quantidade + ? WHERE id=?",
+        [quantidade, produto_id]);
+
+    db.run("INSERT INTO movimentacoes (produto_id,tipo,quantidade) VALUES (?,?,?)",
+        [produto_id, "entrada", quantidade]);
+
+    res.send("OK");
+});
+
+// 🔻 SAÍDA (com controle mensal)
+app.post("/saida", auth, (req, res) => {
+    const { cliente_id, produto_id, quantidade } = req.body;
+
+    db.get(`
+        SELECT SUM(quantidade) as total FROM movimentacoes
+        WHERE cliente_id=? AND tipo='saida'
+        AND strftime('%m', data)=strftime('%m','now')
+    `, [cliente_id], (err, result) => {
+
+        const total = result.total || 0;
+
+        db.get("SELECT limite_mensal FROM clientes WHERE id=?", [cliente_id], (e, cli) => {
+
+            if (total + quantidade > cli.limite_mensal) {
+                return res.json({ erro: "Limite mensal excedido" });
+            }
+
+            db.run("UPDATE produtos SET quantidade = quantidade - ? WHERE id=?",
+                [quantidade, produto_id]);
+
+            db.run("INSERT INTO movimentacoes (cliente_id,produto_id,tipo,quantidade) VALUES (?,?,?,?)",
+                [cliente_id, produto_id, "saida", quantidade]);
+
+            res.send("OK");
+        });
+    });
+});
+
+// 📊 RELATÓRIO
+app.get("/relatorio/:id", auth, (req, res) => {
+    db.all("SELECT * FROM movimentacoes WHERE cliente_id=?",
+        [req.params.id],
+        (err, rows) => res.json(rows));
+});
+
+// 🌐 FRONTEND BONITO
+app.get("/", (req, res) => {
+res.send(`
 <!DOCTYPE html>
-<html lang="pt-br">
+<html>
 <head>
-<meta charset="UTF-8">
-<title>Supermercado Solidário - IM</title>
+<title>Supermercado Solidário</title>
 <style>
-body { font-family: Arial; background:#f4f4f4; padding:20px; }
-.container { max-width:900px; margin:auto; background:#fff; padding:20px; border-radius:10px; }
-h2 { color:#2c3e50; }
-input, select, button {
-    width:100%; padding:10px; margin:5px 0;
-}
-button {
-    background:#27ae60; color:#fff; border:none; cursor:pointer;
-}
-button:hover { background:#219150; }
-.hidden { display:none; }
+body { font-family: Arial; background:#eef2f3; }
+.card { background:#fff; padding:20px; margin:10px; border-radius:10px; }
+input,button,select { padding:10px; margin:5px; width:100%; }
+button { background:#27ae60; color:#fff; border:none; }
 </style>
 </head>
 <body>
 
-<div class="container">
-
-<!-- LOGIN -->
-<div id="login">
-    <h2>Login Administrador</h2>
-    <input type="text" id="user" placeholder="Usuário">
-    <input type="password" id="pass" placeholder="Senha">
-    <button onclick="login()">Entrar</button>
+<div class="card" id="login">
+<h2>Login</h2>
+<input id="email" placeholder="Email">
+<input id="senha" type="password" placeholder="Senha">
+<button onclick="login()">Entrar</button>
 </div>
 
-<!-- SISTEMA -->
-<div id="sistema" class="hidden">
+<div id="app" style="display:none">
 
-<h2>Supermercado Solidário - Igreja IM</h2>
+<div class="card">
+<h3>Clientes</h3>
+<input id="cnome" placeholder="Nome">
+<input id="ccpf" placeholder="CPF">
+<input type="file" id="cfoto">
+<button onclick="addCliente()">Salvar</button>
+<select id="clientes"></select>
+</div>
 
-<!-- CLIENTES -->
-<h3>Cadastrar Cliente</h3>
-<input type="text" id="clienteNome" placeholder="Nome">
-<input type="text" id="clienteCpf" placeholder="CPF">
-<button onclick="addCliente()">Cadastrar Cliente</button>
+<div class="card">
+<h3>Produtos</h3>
+<input id="pnome" placeholder="Produto">
+<input id="pqtd" type="number" placeholder="Quantidade">
+<input type="file" id="pfoto">
+<button onclick="addProduto()">Salvar</button>
+<select id="produtos"></select>
+</div>
 
-<select id="listaClientes"></select>
+<div class="card">
+<h3>Movimentação</h3>
+<input id="qtd" type="number" placeholder="Quantidade">
+<button onclick="entrada()">Entrada</button>
+<button onclick="saida()">Saída</button>
+</div>
 
-<!-- PRODUTOS -->
-<h3>Cadastrar Produto</h3>
-<input type="text" id="produtoNome" placeholder="Produto">
-<input type="number" id="produtoQtd" placeholder="Quantidade Inicial">
-<button onclick="addProduto()">Cadastrar Produto</button>
-
-<select id="listaProdutos"></select>
-
-<!-- ENTRADA -->
-<h3>Entrada de Mercadoria</h3>
-<input type="number" id="entradaQtd" placeholder="Quantidade">
-<button onclick="entrada()">Registrar Entrada</button>
-
-<!-- SAIDA -->
-<h3>Saída de Mercadoria</h3>
-<input type="number" id="saidaQtd" placeholder="Quantidade">
-<button onclick="saida()">Registrar Saída</button>
-
-<!-- ESTOQUE -->
-<h3>Estoque</h3>
-<ul id="estoqueLista"></ul>
-
+<div class="card">
+<h3>Comprovante</h3>
+<button onclick="window.print()">Imprimir</button>
 </div>
 
 </div>
 
 <script>
+let token = "";
 
-// DADOS
-let admin = { user: "admin", pass: "123" };
-let clientes = [];
-let produtos = [];
+async function login(){
+    let res = await fetch("/login", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            email:email.value,
+            senha:senha.value
+        })
+    });
 
-// LOGIN
-function login(){
-    let u = document.getElementById("user").value;
-    let p = document.getElementById("pass").value;
+    let data = await res.json();
+    token = data.token;
 
-    if(u === admin.user && p === admin.pass){
-        document.getElementById("login").classList.add("hidden");
-        document.getElementById("sistema").classList.remove("hidden");
+    if(token){
+        login.style.display="none";
+        app.style.display="block";
+        load();
     } else {
-        alert("Login inválido");
+        alert("Erro login");
     }
 }
 
-// CLIENTES
-function addCliente(){
-    let nome = document.getElementById("clienteNome").value;
-    let cpf = document.getElementById("clienteCpf").value;
+async function load(){
+    let c = await fetch("/clientes",{headers:{authorization:token}});
+    let clientes = await c.json();
 
-    clientes.push({ nome, cpf });
-    atualizarClientes();
-}
+    let p = await fetch("/produtos",{headers:{authorization:token}});
+    let produtos = await p.json();
 
-function atualizarClientes(){
-    let select = document.getElementById("listaClientes");
-    select.innerHTML = "";
-    clientes.forEach((c,i)=>{
-        select.innerHTML += `<option value="${i}">${c.nome}</option>`;
+    clientes.forEach(x=>{
+        document.getElementById("clientes").innerHTML += 
+        \`<option value="\${x.id}">\${x.nome}</option>\`;
+    });
+
+    produtos.forEach(x=>{
+        document.getElementById("produtos").innerHTML += 
+        \`<option value="\${x.id}">\${x.nome}</option>\`;
     });
 }
 
-// PRODUTOS
-function addProduto(){
-    let nome = document.getElementById("produtoNome").value;
-    let qtd = parseInt(document.getElementById("produtoQtd").value);
-
-    produtos.push({ nome, qtd });
-    atualizarProdutos();
-}
-
-function atualizarProdutos(){
-    let select = document.getElementById("listaProdutos");
-    select.innerHTML = "";
-    produtos.forEach((p,i)=>{
-        select.innerHTML += `<option value="${i}">${p.nome}</option>`;
+function fileBase64(input){
+    return new Promise(r=>{
+        let reader = new FileReader();
+        reader.onload=()=>r(reader.result);
+        reader.readAsDataURL(input.files[0]);
     });
-
-    atualizarEstoque();
 }
 
-// ENTRADA
+async function addCliente(){
+    let foto = await fileBase64(cfoto);
+
+    await fetch("/clientes",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({nome:cnome.value,cpf:ccpf.value,foto})
+    });
+    location.reload();
+}
+
+async function addProduto(){
+    let foto = await fileBase64(pfoto);
+
+    await fetch("/produtos",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value,foto})
+    });
+    location.reload();
+}
+
 function entrada(){
-    let i = document.getElementById("listaProdutos").value;
-    let qtd = parseInt(document.getElementById("entradaQtd").value);
-
-    produtos[i].qtd += qtd;
-    atualizarEstoque();
-}
-
-// SAÍDA
-function saida(){
-    let i = document.getElementById("listaProdutos").value;
-    let qtd = parseInt(document.getElementById("saidaQtd").value);
-
-    if(produtos[i].qtd >= qtd){
-        produtos[i].qtd -= qtd;
-        atualizarEstoque();
-    } else {
-        alert("Estoque insuficiente");
-    }
-}
-
-// ESTOQUE
-function atualizarEstoque(){
-    let lista = document.getElementById("estoqueLista");
-    lista.innerHTML = "";
-
-    produtos.forEach(p=>{
-        lista.innerHTML += `<li>${p.nome} - ${p.qtd}</li>`;
+    fetch("/entrada",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({
+            produto_id:produtos.value,
+            quantidade:qtd.value
+        })
     });
 }
 
+function saida(){
+    fetch("/saida",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({
+            cliente_id:clientes.value,
+            produto_id:produtos.value,
+            quantidade:qtd.value
+        })
+    });
+}
 </script>
 
 </body>
 </html>
+`);
+});
+
+app.listen(3000, () => console.log("Rodando em http://localhost:3000"));
