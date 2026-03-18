@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>Supermercado Solidário - IM</title>
+<style>
+body { font-family: Arial; background:#f4f4f4; padding:20px; }
+.container { max-width:900px; margin:auto; background:#fff; padding:20px; border-radius:10px; }
+h2 { color:#2c3e50; }
+input, select, button {
+    width:100%; padding:10px; margin:5px 0;
+}
+button {
+    background:#27ae60; color:#fff; border:none; cursor:pointer;
+}
+button:hover { background:#219150; }
+.hidden { display:none; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- LOGIN -->
+<div id="login">
+    <h2>Login Administrador</h2>
+    <input type="text" id="user" placeholder="Usuário">
+    <input type="password" id="pass" placeholder="Senha">
+    <button onclick="login()">Entrar</button>
+</div>
+
+<!-- SISTEMA -->
+<div id="sistema" class="hidden">
+
+<h2>Supermercado Solidário - Igreja IM</h2>
+
+<!-- CLIENTES -->
+<h3>Cadastrar Cliente</h3>
+<input type="text" id="clienteNome" placeholder="Nome">
+<input type="text" id="clienteCpf" placeholder="CPF">
+<button onclick="addCliente()">Cadastrar Cliente</button>
+
+<select id="listaClientes"></select>
+
+<!-- PRODUTOS -->
+<h3>Cadastrar Produto</h3>
+<input type="text" id="produtoNome" placeholder="Produto">
+<input type="number" id="produtoQtd" placeholder="Quantidade Inicial">
+<button onclick="addProduto()">Cadastrar Produto</button>
+
+<select id="listaProdutos"></select>
+
+<!-- ENTRADA -->
+<h3>Entrada de Mercadoria</h3>
+<input type="number" id="entradaQtd" placeholder="Quantidade">
+<button onclick="entrada()">Registrar Entrada</button>
+
+<!-- SAIDA -->
+<h3>Saída de Mercadoria</h3>
+<input type="number" id="saidaQtd" placeholder="Quantidade">
+<button onclick="saida()">Registrar Saída</button>
+
+<!-- ESTOQUE -->
+<h3>Estoque</h3>
+<ul id="estoqueLista"></ul>
+
+</div>
+
+</div>
+
+<script>
+
+// DADOS
+let admin = { user: "admin", pass: "123" };
+let clientes = [];
+let produtos = [];
+
+// LOGIN
+function login(){
+    let u = document.getElementById("user").value;
+    let p = document.getElementById("pass").value;
+
+    if(u === admin.user && p === admin.pass){
+        document.getElementById("login").classList.add("hidden");
+        document.getElementById("sistema").classList.remove("hidden");
+    } else {
+        alert("Login inválido");
+    }
+}
+
+// CLIENTES
+function addCliente(){
+    let nome = document.getElementById("clienteNome").value;
+    let cpf = document.getElementById("clienteCpf").value;
+
+    clientes.push({ nome, cpf });
+    atualizarClientes();
+}
+
+function atualizarClientes(){
+    let select = document.getElementById("listaClientes");
+    select.innerHTML = "";
+    clientes.forEach((c,i)=>{
+        select.innerHTML += `<option value="${i}">${c.nome}</option>`;
+    });
+}
+
+// PRODUTOS
+function addProduto(){
+    let nome = document.getElementById("produtoNome").value;
+    let qtd = parseInt(document.getElementById("produtoQtd").value);
+
+    produtos.push({ nome, qtd });
+    atualizarProdutos();
+}
+
+function atualizarProdutos(){
+    let select = document.getElementById("listaProdutos");
+    select.innerHTML = "";
+    produtos.forEach((p,i)=>{
+        select.innerHTML += `<option value="${i}">${p.nome}</option>`;
+    });
+
+    atualizarEstoque();
+}
+
+// ENTRADA
+function entrada(){
+    let i = document.getElementById("listaProdutos").value;
+    let qtd = parseInt(document.getElementById("entradaQtd").value);
+
+    produtos[i].qtd += qtd;
+    atualizarEstoque();
+}
+
+// SAÍDA
+function saida(){
+    let i = document.getElementById("listaProdutos").value;
+    let qtd = parseInt(document.getElementById("saidaQtd").value);
+
+    if(produtos[i].qtd >= qtd){
+        produtos[i].qtd -= qtd;
+        atualizarEstoque();
+    } else {
+        alert("Estoque insuficiente");
+    }
+}
+
+// ESTOQUE
+function atualizarEstoque(){
+    let lista = document.getElementById("estoqueLista");
+    lista.innerHTML = "";
+
+    produtos.forEach(p=>{
+        lista.innerHTML += `<li>${p.nome} - ${p.qtd}</li>`;
+    });
+}
+
+</script>
+
+</body>
+</html>
