@@ -10,62 +10,38 @@ app.use(express.json());
 const db = new sqlite3.Database("mercado.db");
 
 db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS admins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE,
-        senha TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS produtos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT,
-        preco REAL,
-        estoque INTEGER
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS vendas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        total REAL,
-        data DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS itens_venda (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        venda_id INTEGER,
-        produto_id INTEGER,
-        quantidade INTEGER,
-        subtotal REAL
-    )`);
+    db.run("CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY, email TEXT, senha TEXT)");
+    db.run("CREATE TABLE IF NOT EXISTS produtos (id INTEGER PRIMARY KEY, nome TEXT, preco REAL, estoque INTEGER)");
+    db.run("CREATE TABLE IF NOT EXISTS vendas (id INTEGER PRIMARY KEY, total REAL)");
 });
 
 // ADMIN PADRÃO
 (async () => {
     const hash = await bcrypt.hash("123", 10);
-    db.run("INSERT OR IGNORE INTO admins (email,senha) VALUES (?,?)",
-        ["admin@email.com", hash]);
+    db.run("INSERT OR IGNORE INTO admins (id,email,senha) VALUES (1,'admin@email.com',?)",[hash]);
 })();
 
 // LOGIN
-app.post("/login", (req, res) => {
-    const { email, senha } = req.body;
+app.post("/login", (req,res)=>{
+    const {email,senha} = req.body;
 
-    db.get("SELECT * FROM admins WHERE email=?", [email], async (err, user) => {
-        if (!user) return res.json({ erro: "Usuário não encontrado" });
+    db.get("SELECT * FROM admins WHERE email=?", [email], async (err,user)=>{
+        if(!user) return res.json({erro:"Usuário não encontrado"});
 
-        const ok = await bcrypt.compare(senha, user.senha);
-        if (!ok) return res.json({ erro: "Senha inválida" });
+        const ok = await bcrypt.compare(senha,user.senha);
+        if(!ok) return res.json({erro:"Senha inválida"});
 
-        const token = jwt.sign({ id: user.id }, "segredo");
-        res.json({ token });
+        const token = jwt.sign({id:user.id},"segredo");
+        res.json({token});
     });
 });
 
 // AUTH
-function auth(req, res, next){
+function auth(req,res,next){
     const token = req.headers.authorization;
-    if (!token) return res.sendStatus(401);
-    try { jwt.verify(token,"segredo"); next(); }
-    catch { res.sendStatus(403); }
+    if(!token) return res.sendStatus(401);
+    try{ jwt.verify(token,"segredo"); next(); }
+    catch{ res.sendStatus(403); }
 }
 
 // PRODUTOS
@@ -74,70 +50,53 @@ app.get("/produtos", auth, (req,res)=>{
 });
 
 app.post("/produtos", auth, (req,res)=>{
-    const {nome, preco, estoque} = req.body;
+    const {nome,preco,estoque} = req.body;
     db.run("INSERT INTO produtos (nome,preco,estoque) VALUES (?,?,?)",
     [nome,preco,estoque], ()=>res.send("OK"));
 });
 
-// VENDER
+// VENDA
 app.post("/venda", auth, (req,res)=>{
     const {itens} = req.body;
-    let total = 0;
 
+    let total = 0;
     itens.forEach(i => total += i.subtotal);
 
-    db.run("INSERT INTO vendas (total) VALUES (?)",[total], function(){
-        const venda_id = this.lastID;
+    db.run("INSERT INTO vendas (total) VALUES (?)",[total]);
 
-        itens.forEach(i=>{
-            db.run(`INSERT INTO itens_venda (venda_id,produto_id,quantidade,subtotal)
-            VALUES (?,?,?,?)`,
-            [venda_id,i.produto_id,i.quantidade,i.subtotal]);
-
-            db.run("UPDATE produtos SET estoque = estoque - ? WHERE id=?",
-            [i.quantidade,i.produto_id]);
-        });
-
-        res.json({ok:true});
+    itens.forEach(i=>{
+        db.run("UPDATE produtos SET estoque = estoque - ? WHERE id=?",
+        [i.quantidade,i.id]);
     });
+
+    res.send("OK");
 });
 
 // DASHBOARD
 app.get("/dashboard", auth, (req,res)=>{
-    db.get("SELECT SUM(total) as total FROM vendas",(e,v)=>{
-        db.get("SELECT COUNT(*) as vendas FROM vendas",(e2,c)=>{
-            res.json({faturamento:v.total||0, vendas:c.vendas});
-        });
+    db.get("SELECT SUM(total) as total FROM vendas",(e,r)=>{
+        res.json({faturamento: r.total || 0});
     });
 });
 
-// FRONTEND PROFISSIONAL
+// FRONTEND LIMPO E FUNCIONAL
 app.get("/", (req,res)=>{
 res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<title>Mercado Solidário</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<title>Mercado</title>
 <style>
-body{margin:0;font-family:Arial;background:#ecf0f1;}
-.top{background:#2c3e50;color:#fff;padding:15px;}
-.container{padding:20px;}
-.card{background:#fff;padding:15px;margin:10px;border-radius:8px;}
-input,button{padding:10px;margin:5px;width:100%;}
-button{background:#27ae60;color:#fff;border:none;}
-.flex{display:flex;gap:10px;}
+body{font-family:Arial;background:#eee;margin:0}
+.box{background:#fff;padding:20px;margin:20px;border-radius:10px}
+button{padding:10px;width:100%;background:#27ae60;color:#fff;border:none}
+input,select{padding:10px;width:100%;margin:5px 0}
 </style>
 </head>
-
 <body>
 
-<div class="top">🛒 Sistema de Mercado</div>
-
-<div class="container">
-
-<div id="login">
-<h3>Login</h3>
+<div class="box" id="loginBox">
+<h2>Login</h2>
 <input id="email" placeholder="Email">
 <input id="senha" type="password" placeholder="Senha">
 <button onclick="login()">Entrar</button>
@@ -146,33 +105,28 @@ button{background:#27ae60;color:#fff;border:none;}
 
 <div id="app" style="display:none">
 
-<div class="card">
+<div class="box">
 <h3>Dashboard</h3>
-<p>Faturamento: R$ <span id="fat"></span></p>
-<p>Vendas: <span id="vend"></span></p>
-<canvas id="grafico"></canvas>
+Faturamento: R$ <span id="fat">0</span>
 </div>
 
-<div class="card">
-<h3>Cadastrar Produto</h3>
+<div class="box">
+<h3>Produto</h3>
 <input id="nome" placeholder="Nome">
-<input id="preco" type="number" placeholder="Preço">
-<input id="estoque" type="number" placeholder="Estoque">
+<input id="preco" placeholder="Preço">
+<input id="estoque" placeholder="Estoque">
 <button onclick="addProduto()">Salvar</button>
 </div>
 
-<div class="card">
-<h3>Caixa (PDV)</h3>
-<select id="lista"></select>
-<input id="qtd" type="number" placeholder="Quantidade">
-<button onclick="addItem()">Adicionar</button>
+<div class="box">
+<h3>Caixa</h3>
+<select id="produtos"></select>
+<input id="qtd" placeholder="Quantidade">
+<button onclick="addCarrinho()">Adicionar</button>
 
-<ul id="carrinho"></ul>
-
-<h4>Total: R$ <span id="total">0</span></h4>
+<ul id="listaCarrinho"></ul>
+Total: R$ <span id="total">0</span>
 <button onclick="finalizar()">Finalizar Venda</button>
-</div>
-
 </div>
 
 </div>
@@ -182,82 +136,98 @@ let token="";
 let carrinho=[];
 
 async function login(){
-    let res = await fetch("/login",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({email:email.value,senha:senha.value})});
+    let res = await fetch("/login",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            email:document.getElementById("email").value,
+            senha:document.getElementById("senha").value
+        })
+    });
 
     let data = await res.json();
 
     if(data.token){
         token=data.token;
-        login.style.display="none";
-        app.style.display="block";
+        document.getElementById("loginBox").style.display="none";
+        document.getElementById("app").style.display="block";
         carregar();
-    } else erro.innerText=data.erro;
+    } else {
+        document.getElementById("erro").innerText = data.erro;
+    }
 }
 
 async function carregar(){
     let p = await fetch("/produtos",{headers:{authorization:token}});
     let produtos = await p.json();
 
-    lista.innerHTML="";
+    let sel = document.getElementById("produtos");
+    sel.innerHTML="";
+
     produtos.forEach(p=>{
-        lista.innerHTML+=\`<option value="\${p.id}" data-preco="\${p.preco}">
+        sel.innerHTML += \`<option value="\${p.id}" data-preco="\${p.preco}">
         \${p.nome} - R$\${p.preco}</option>\`;
     });
 
     let d = await fetch("/dashboard",{headers:{authorization:token}});
     let dash = await d.json();
 
-    fat.innerText = dash.faturamento;
-    vend.innerText = dash.vendas;
-
-    new Chart(grafico,{
-        type:"doughnut",
-        data:{
-            labels:["Vendas"],
-            datasets:[{data:[dash.vendas]}]
-        }
-    });
+    document.getElementById("fat").innerText = dash.faturamento;
 }
 
-async function addProduto(){
-    await fetch("/produtos",{method:"POST",
-    headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({nome:nome.value,preco:preco.value,estoque:estoque.value})});
-    carregar();
-}
+function addCarrinho(){
+    let sel = document.getElementById("produtos");
+    let opt = sel.options[sel.selectedIndex];
 
-function addItem(){
-    let opt = lista.options[lista.selectedIndex];
     let id = opt.value;
     let preco = parseFloat(opt.dataset.preco);
-    let quantidade = parseInt(qtd.value);
+    let qtd = parseInt(document.getElementById("qtd").value);
 
-    let subtotal = preco * quantidade;
+    let subtotal = preco * qtd;
 
-    carrinho.push({produto_id:id,quantidade,subtotal});
+    carrinho.push({id,quantidade:qtd,subtotal});
 
-    carrinhoHTML.innerHTML="";
+    atualizarCarrinho();
+}
+
+function atualizarCarrinho(){
+    let lista = document.getElementById("listaCarrinho");
+    lista.innerHTML="";
+
     let total=0;
 
     carrinho.forEach(i=>{
         total+=i.subtotal;
-        carrinhoHTML.innerHTML += \`<li>Qtd: \${i.quantidade} - R$\${i.subtotal}</li>\`;
+        lista.innerHTML += \`<li>\${i.quantidade}x = R$\${i.subtotal}</li>\`;
     });
 
     document.getElementById("total").innerText = total;
 }
 
 async function finalizar(){
-    await fetch("/venda",{method:"POST",
-    headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({itens:carrinho})});
+    await fetch("/venda",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({itens:carrinho})
+    });
 
     alert("Venda realizada!");
     carrinho=[];
-    carrinhoHTML.innerHTML="";
-    total.innerText=0;
+    atualizarCarrinho();
+    carregar();
+}
+
+async function addProduto(){
+    await fetch("/produtos",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({
+            nome:document.getElementById("nome").value,
+            preco:document.getElementById("preco").value,
+            estoque:document.getElementById("estoque").value
+        })
+    });
+
     carregar();
 }
 </script>
@@ -267,4 +237,4 @@ async function finalizar(){
 `);
 });
 
-app.listen(3000,()=>console.log("🚀 http://localhost:3000"));
+app.listen(3000,()=>console.log("Rodando em http://localhost:3000"));
