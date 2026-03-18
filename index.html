@@ -4,52 +4,48 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
 
-const db = new sqlite3.Database("banco.db");
+// BANCO
+const db = new sqlite3.Database("mercado.db");
 
-// 📦 BANCO
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT,
         email TEXT UNIQUE,
         senha TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS clientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT,
-        cpf TEXT,
-        foto TEXT,
-        limite_mensal INTEGER DEFAULT 10
     )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS produtos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT,
-        quantidade INTEGER,
-        foto TEXT
+        preco REAL,
+        estoque INTEGER
     )`);
 
-    db.run(`CREATE TABLE IF NOT EXISTS movimentacoes (
+    db.run(`CREATE TABLE IF NOT EXISTS vendas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER,
-        produto_id INTEGER,
-        tipo TEXT,
-        quantidade INTEGER,
+        total REAL,
         data DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS itens_venda (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        venda_id INTEGER,
+        produto_id INTEGER,
+        quantidade INTEGER,
+        subtotal REAL
     )`);
 });
 
-// 🔐 ADMIN PADRÃO
+// ADMIN PADRÃO
 (async () => {
-    const senhaHash = await bcrypt.hash("123", 10);
-    db.run(`INSERT OR IGNORE INTO admins (nome,email,senha)
-        VALUES ('Admin','admin@email.com',?)`, [senhaHash]);
+    const hash = await bcrypt.hash("123", 10);
+    db.run("INSERT OR IGNORE INTO admins (email,senha) VALUES (?,?)",
+        ["admin@email.com", hash]);
 })();
 
-// 🔐 LOGIN
+// LOGIN
 app.post("/login", (req, res) => {
     const { email, senha } = req.body;
 
@@ -64,131 +60,117 @@ app.post("/login", (req, res) => {
     });
 });
 
-// 🔐 AUTH
-function auth(req, res, next) {
+// AUTH
+function auth(req, res, next){
     const token = req.headers.authorization;
     if (!token) return res.sendStatus(401);
-
-    try {
-        jwt.verify(token, "segredo");
-        next();
-    } catch {
-        res.sendStatus(403);
-    }
+    try { jwt.verify(token,"segredo"); next(); }
+    catch { res.sendStatus(403); }
 }
 
-// ROTAS
-app.get("/dashboard", auth, (req, res) => {
-    db.all("SELECT nome, quantidade FROM produtos", [], (err, produtos) => {
-        db.get("SELECT COUNT(*) as clientes FROM clientes", [], (e, c) => {
-            db.get("SELECT COUNT(*) as produtos FROM produtos", [], (e2, p) => {
-                res.json({
-                    produtos,
-                    totalClientes: c.clientes,
-                    totalProdutos: p.produtos
-                });
-            });
+// PRODUTOS
+app.get("/produtos", auth, (req,res)=>{
+    db.all("SELECT * FROM produtos",[],(e,r)=>res.json(r));
+});
+
+app.post("/produtos", auth, (req,res)=>{
+    const {nome, preco, estoque} = req.body;
+    db.run("INSERT INTO produtos (nome,preco,estoque) VALUES (?,?,?)",
+    [nome,preco,estoque], ()=>res.send("OK"));
+});
+
+// VENDER
+app.post("/venda", auth, (req,res)=>{
+    const {itens} = req.body;
+    let total = 0;
+
+    itens.forEach(i => total += i.subtotal);
+
+    db.run("INSERT INTO vendas (total) VALUES (?)",[total], function(){
+        const venda_id = this.lastID;
+
+        itens.forEach(i=>{
+            db.run(`INSERT INTO itens_venda (venda_id,produto_id,quantidade,subtotal)
+            VALUES (?,?,?,?)`,
+            [venda_id,i.produto_id,i.quantidade,i.subtotal]);
+
+            db.run("UPDATE produtos SET estoque = estoque - ? WHERE id=?",
+            [i.quantidade,i.produto_id]);
+        });
+
+        res.json({ok:true});
+    });
+});
+
+// DASHBOARD
+app.get("/dashboard", auth, (req,res)=>{
+    db.get("SELECT SUM(total) as total FROM vendas",(e,v)=>{
+        db.get("SELECT COUNT(*) as vendas FROM vendas",(e2,c)=>{
+            res.json({faturamento:v.total||0, vendas:c.vendas});
         });
     });
 });
 
-app.get("/clientes", auth, (req, res) => {
-    db.all("SELECT * FROM clientes", [], (err, rows) => res.json(rows));
-});
-
-app.get("/produtos", auth, (req, res) => {
-    db.all("SELECT * FROM produtos", [], (err, rows) => res.json(rows));
-});
-
-app.post("/clientes", auth, (req, res) => {
-    const { nome, cpf, foto } = req.body;
-    db.run("INSERT INTO clientes (nome,cpf,foto) VALUES (?,?,?)",
-        [nome, cpf, foto],
-        () => res.send("OK"));
-});
-
-app.post("/produtos", auth, (req, res) => {
-    const { nome, quantidade, foto } = req.body;
-    db.run("INSERT INTO produtos (nome,quantidade,foto) VALUES (?,?,?)",
-        [nome, quantidade, foto],
-        () => res.send("OK"));
-});
-
-app.post("/entrada", auth, (req, res) => {
-    const { produto_id, quantidade } = req.body;
-
-    db.run("UPDATE produtos SET quantidade = quantidade + ? WHERE id=?",
-        [quantidade, produto_id]);
-
-    res.send("OK");
-});
-
-app.post("/saida", auth, (req, res) => {
-    const { cliente_id, produto_id, quantidade } = req.body;
-
-    db.run("UPDATE produtos SET quantidade = quantidade - ? WHERE id=?",
-        [quantidade, produto_id]);
-
-    res.send("OK");
-});
-
-// 🌐 FRONTEND CORRIGIDO
-app.get("/", (req, res) => {
+// FRONTEND PROFISSIONAL
+app.get("/", (req,res)=>{
 res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<title>Supermercado Solidário</title>
+<title>Mercado Solidário</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <style>
-body { margin:0; font-family:Arial; background:#f1f3f6; }
-.sidebar { width:220px; height:100vh; background:#2c3e50; position:fixed; color:#fff; padding:20px; }
-.sidebar button { width:100%; margin:10px 0; padding:10px; background:#34495e; color:#fff; border:none; }
-.main { margin-left:240px; padding:20px; }
-.card { background:#fff; padding:20px; border-radius:10px; margin-bottom:20px; }
-input, select, button { width:100%; padding:10px; margin:5px 0; }
-button { background:#27ae60; color:#fff; }
+body{margin:0;font-family:Arial;background:#ecf0f1;}
+.top{background:#2c3e50;color:#fff;padding:15px;}
+.container{padding:20px;}
+.card{background:#fff;padding:15px;margin:10px;border-radius:8px;}
+input,button{padding:10px;margin:5px;width:100%;}
+button{background:#27ae60;color:#fff;border:none;}
+.flex{display:flex;gap:10px;}
 </style>
 </head>
 
 <body>
 
-<div class="sidebar">
-<button onclick="mostrarTela('dashboard')">Dashboard</button>
-<button onclick="mostrarTela('clientes')">Clientes</button>
-<button onclick="mostrarTela('produtos')">Produtos</button>
-</div>
+<div class="top">🛒 Sistema de Mercado</div>
 
-<div class="main">
+<div class="container">
 
-<div id="loginBox">
-<h2>Login</h2>
-<input id="email">
-<input id="senha" type="password">
-<button onclick="fazerLogin()">Entrar</button>
+<div id="login">
+<h3>Login</h3>
+<input id="email" placeholder="Email">
+<input id="senha" type="password" placeholder="Senha">
+<button onclick="login()">Entrar</button>
 <p id="erro"></p>
 </div>
 
 <div id="app" style="display:none">
 
-<div id="dashboard" class="tela">
+<div class="card">
 <h3>Dashboard</h3>
+<p>Faturamento: R$ <span id="fat"></span></p>
+<p>Vendas: <span id="vend"></span></p>
 <canvas id="grafico"></canvas>
 </div>
 
-<div id="clientes" class="tela" style="display:none">
-<input id="cnome" placeholder="Nome">
-<input id="ccpf" placeholder="CPF">
-<button onclick="addCliente()">Salvar</button>
-<select id="listaClientes"></select>
+<div class="card">
+<h3>Cadastrar Produto</h3>
+<input id="nome" placeholder="Nome">
+<input id="preco" type="number" placeholder="Preço">
+<input id="estoque" type="number" placeholder="Estoque">
+<button onclick="addProduto()">Salvar</button>
 </div>
 
-<div id="produtos" class="tela" style="display:none">
-<input id="pnome" placeholder="Produto">
-<input id="pqtd" type="number">
-<button onclick="addProduto()">Salvar</button>
-<select id="listaProdutos"></select>
+<div class="card">
+<h3>Caixa (PDV)</h3>
+<select id="lista"></select>
+<input id="qtd" type="number" placeholder="Quantidade">
+<button onclick="addItem()">Adicionar</button>
+
+<ul id="carrinho"></ul>
+
+<h4>Total: R$ <span id="total">0</span></h4>
+<button onclick="finalizar()">Finalizar Venda</button>
 </div>
 
 </div>
@@ -197,79 +179,86 @@ button { background:#27ae60; color:#fff; }
 
 <script>
 let token="";
+let carrinho=[];
 
-function mostrarTela(nome){
-    document.querySelectorAll(".tela").forEach(t=>t.style.display="none");
-    document.getElementById(nome).style.display="block";
-}
+async function login(){
+    let res = await fetch("/login",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({email:email.value,senha:senha.value})});
 
-async function fazerLogin(){
-    const res = await fetch("/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-            email:document.getElementById("email").value,
-            senha:document.getElementById("senha").value
-        })
-    });
-
-    const data = await res.json();
+    let data = await res.json();
 
     if(data.token){
-        token = data.token;
-        document.getElementById("loginBox").style.display="none";
-        document.getElementById("app").style.display="block";
-        carregarDados();
-    } else {
-        document.getElementById("erro").innerText = data.erro;
-    }
+        token=data.token;
+        login.style.display="none";
+        app.style.display="block";
+        carregar();
+    } else erro.innerText=data.erro;
 }
 
-async function carregarDados(){
-    const res = await fetch("/dashboard", { headers:{authorization:token}});
-    const data = await res.json();
+async function carregar(){
+    let p = await fetch("/produtos",{headers:{authorization:token}});
+    let produtos = await p.json();
 
-    new Chart(document.getElementById("grafico"), {
-        type:"bar",
+    lista.innerHTML="";
+    produtos.forEach(p=>{
+        lista.innerHTML+=\`<option value="\${p.id}" data-preco="\${p.preco}">
+        \${p.nome} - R$\${p.preco}</option>\`;
+    });
+
+    let d = await fetch("/dashboard",{headers:{authorization:token}});
+    let dash = await d.json();
+
+    fat.innerText = dash.faturamento;
+    vend.innerText = dash.vendas;
+
+    new Chart(grafico,{
+        type:"doughnut",
         data:{
-            labels:data.produtos.map(p=>p.nome),
-            datasets:[{label:"Estoque", data:data.produtos.map(p=>p.quantidade)}]
+            labels:["Vendas"],
+            datasets:[{data:[dash.vendas]}]
         }
     });
-
-    let clientes = await fetch("/clientes",{headers:{authorization:token}});
-    let cl = await clientes.json();
-    let sel = document.getElementById("listaClientes");
-    sel.innerHTML="";
-    cl.forEach(c=>{
-        sel.innerHTML += \`<option>\${c.nome}</option>\`;
-    });
-
-    let produtos = await fetch("/produtos",{headers:{authorization:token}});
-    let pr = await produtos.json();
-    let sel2 = document.getElementById("listaProdutos");
-    sel2.innerHTML="";
-    pr.forEach(p=>{
-        sel2.innerHTML += \`<option>\${p.nome}</option>\`;
-    });
-}
-
-async function addCliente(){
-    await fetch("/clientes",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({nome:cnome.value,cpf:ccpf.value})
-    });
-    carregarDados();
 }
 
 async function addProduto(){
-    await fetch("/produtos",{
-        method:"POST",
-        headers:{authorization:token,"Content-Type":"application/json"},
-        body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value})
+    await fetch("/produtos",{method:"POST",
+    headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({nome:nome.value,preco:preco.value,estoque:estoque.value})});
+    carregar();
+}
+
+function addItem(){
+    let opt = lista.options[lista.selectedIndex];
+    let id = opt.value;
+    let preco = parseFloat(opt.dataset.preco);
+    let quantidade = parseInt(qtd.value);
+
+    let subtotal = preco * quantidade;
+
+    carrinho.push({produto_id:id,quantidade,subtotal});
+
+    carrinhoHTML.innerHTML="";
+    let total=0;
+
+    carrinho.forEach(i=>{
+        total+=i.subtotal;
+        carrinhoHTML.innerHTML += \`<li>Qtd: \${i.quantidade} - R$\${i.subtotal}</li>\`;
     });
-    carregarDados();
+
+    document.getElementById("total").innerText = total;
+}
+
+async function finalizar(){
+    await fetch("/venda",{method:"POST",
+    headers:{authorization:token,"Content-Type":"application/json"},
+    body:JSON.stringify({itens:carrinho})});
+
+    alert("Venda realizada!");
+    carrinho=[];
+    carrinhoHTML.innerHTML="";
+    total.innerText=0;
+    carregar();
 }
 </script>
 
@@ -278,4 +267,4 @@ async function addProduto(){
 `);
 });
 
-app.listen(3000, () => console.log("🚀 http://localhost:3000"));
+app.listen(3000,()=>console.log("🚀 http://localhost:3000"));
