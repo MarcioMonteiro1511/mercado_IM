@@ -77,73 +77,7 @@ function auth(req, res, next) {
     }
 }
 
-// 👤 CLIENTES
-app.post("/clientes", auth, (req, res) => {
-    const { nome, cpf, foto } = req.body;
-    db.run("INSERT INTO clientes (nome,cpf,foto) VALUES (?,?,?)",
-        [nome, cpf, foto],
-        () => res.send("OK"));
-});
-
-app.get("/clientes", auth, (req, res) => {
-    db.all("SELECT * FROM clientes", [], (err, rows) => res.json(rows));
-});
-
-// 📦 PRODUTOS
-app.post("/produtos", auth, (req, res) => {
-    const { nome, quantidade, foto } = req.body;
-    db.run("INSERT INTO produtos (nome,quantidade,foto) VALUES (?,?,?)",
-        [nome, quantidade, foto],
-        () => res.send("OK"));
-});
-
-app.get("/produtos", auth, (req, res) => {
-    db.all("SELECT * FROM produtos", [], (err, rows) => res.json(rows));
-});
-
-// 🔄 ENTRADA
-app.post("/entrada", auth, (req, res) => {
-    const { produto_id, quantidade } = req.body;
-
-    db.run("UPDATE produtos SET quantidade = quantidade + ? WHERE id=?",
-        [quantidade, produto_id]);
-
-    db.run("INSERT INTO movimentacoes (produto_id,tipo,quantidade) VALUES (?,?,?)",
-        [produto_id, "entrada", quantidade]);
-
-    res.send("OK");
-});
-
-// 🔻 SAÍDA COM CONTROLE MENSAL
-app.post("/saida", auth, (req, res) => {
-    const { cliente_id, produto_id, quantidade } = req.body;
-
-    db.get(`
-        SELECT SUM(quantidade) as total FROM movimentacoes
-        WHERE cliente_id=? AND tipo='saida'
-        AND strftime('%m', data)=strftime('%m','now')
-    `, [cliente_id], (err, result) => {
-
-        const total = result.total || 0;
-
-        db.get("SELECT limite_mensal FROM clientes WHERE id=?", [cliente_id], (e, cli) => {
-
-            if (total + quantidade > cli.limite_mensal) {
-                return res.json({ erro: "Limite mensal excedido" });
-            }
-
-            db.run("UPDATE produtos SET quantidade = quantidade - ? WHERE id=?",
-                [quantidade, produto_id]);
-
-            db.run("INSERT INTO movimentacoes (cliente_id,produto_id,tipo,quantidade) VALUES (?,?,?,?)",
-                [cliente_id, produto_id, "saida", quantidade]);
-
-            res.send("OK");
-        });
-    });
-});
-
-// 📊 DASHBOARD DADOS
+// ROTAS
 app.get("/dashboard", auth, (req, res) => {
     db.all("SELECT nome, quantidade FROM produtos", [], (err, produtos) => {
         db.get("SELECT COUNT(*) as clientes FROM clientes", [], (e, c) => {
@@ -158,7 +92,47 @@ app.get("/dashboard", auth, (req, res) => {
     });
 });
 
-// 🌐 FRONTEND PROFISSIONAL
+app.get("/clientes", auth, (req, res) => {
+    db.all("SELECT * FROM clientes", [], (err, rows) => res.json(rows));
+});
+
+app.get("/produtos", auth, (req, res) => {
+    db.all("SELECT * FROM produtos", [], (err, rows) => res.json(rows));
+});
+
+app.post("/clientes", auth, (req, res) => {
+    const { nome, cpf, foto } = req.body;
+    db.run("INSERT INTO clientes (nome,cpf,foto) VALUES (?,?,?)",
+        [nome, cpf, foto],
+        () => res.send("OK"));
+});
+
+app.post("/produtos", auth, (req, res) => {
+    const { nome, quantidade, foto } = req.body;
+    db.run("INSERT INTO produtos (nome,quantidade,foto) VALUES (?,?,?)",
+        [nome, quantidade, foto],
+        () => res.send("OK"));
+});
+
+app.post("/entrada", auth, (req, res) => {
+    const { produto_id, quantidade } = req.body;
+
+    db.run("UPDATE produtos SET quantidade = quantidade + ? WHERE id=?",
+        [quantidade, produto_id]);
+
+    res.send("OK");
+});
+
+app.post("/saida", auth, (req, res) => {
+    const { cliente_id, produto_id, quantidade } = req.body;
+
+    db.run("UPDATE produtos SET quantidade = quantidade - ? WHERE id=?",
+        [quantidade, produto_id]);
+
+    res.send("OK");
+});
+
+// 🌐 FRONTEND CORRIGIDO
 app.get("/", (req, res) => {
 res.send(`
 <!DOCTYPE html>
@@ -170,74 +144,53 @@ res.send(`
 <style>
 body { margin:0; font-family:Arial; background:#f1f3f6; }
 .sidebar { width:220px; height:100vh; background:#2c3e50; position:fixed; color:#fff; padding:20px; }
-.sidebar h2 { color:#2ecc71; }
-.sidebar button { width:100%; margin:10px 0; padding:10px; border:none; background:#34495e; color:#fff; }
+.sidebar button { width:100%; margin:10px 0; padding:10px; background:#34495e; color:#fff; border:none; }
 .main { margin-left:240px; padding:20px; }
 .card { background:#fff; padding:20px; border-radius:10px; margin-bottom:20px; }
-.grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:20px; }
-.stat { font-size:22px; font-weight:bold; color:#27ae60; }
 input, select, button { width:100%; padding:10px; margin:5px 0; }
-button { background:#27ae60; color:#fff; border:none; }
-img { width:50px; border-radius:5px; }
+button { background:#27ae60; color:#fff; }
 </style>
 </head>
 
 <body>
 
 <div class="sidebar">
-    <h2>IM Solidário</h2>
-    <button onclick="show('dashboard')">Dashboard</button>
-    <button onclick="show('clientes')">Clientes</button>
-    <button onclick="show('produtos')">Produtos</button>
-    <button onclick="show('mov')">Movimentação</button>
+<button onclick="mostrarTela('dashboard')">Dashboard</button>
+<button onclick="mostrarTela('clientes')">Clientes</button>
+<button onclick="mostrarTela('produtos')">Produtos</button>
 </div>
 
-<div id="login" class="main">
-<div class="card">
+<div class="main">
+
+<div id="loginBox">
 <h2>Login</h2>
-<input id="email" placeholder="Email">
+<input id="email">
 <input id="senha" type="password">
-<button onclick="login()">Entrar</button>
-</div>
-</div>
-
-<div id="app" class="main" style="display:none">
-
-<div id="dashboardTela" class="tela">
-<div class="grid">
-<div class="card"><div>Total Clientes</div><div id="c" class="stat"></div></div>
-<div class="card"><div>Total Produtos</div><div id="p" class="stat"></div></div>
-</div>
-<div class="card"><canvas id="grafico"></canvas></div>
+<button onclick="fazerLogin()">Entrar</button>
+<p id="erro"></p>
 </div>
 
-<div id="clientesTela" class="tela" style="display:none">
-<div class="card">
+<div id="app" style="display:none">
+
+<div id="dashboard" class="tela">
+<h3>Dashboard</h3>
+<canvas id="grafico"></canvas>
+</div>
+
+<div id="clientes" class="tela" style="display:none">
 <input id="cnome" placeholder="Nome">
 <input id="ccpf" placeholder="CPF">
-<input type="file" id="cfoto">
 <button onclick="addCliente()">Salvar</button>
-<select id="clientes"></select>
-</div>
+<select id="listaClientes"></select>
 </div>
 
-<div id="produtosTela" class="tela" style="display:none">
-<div class="card">
+<div id="produtos" class="tela" style="display:none">
 <input id="pnome" placeholder="Produto">
 <input id="pqtd" type="number">
-<input type="file" id="pfoto">
 <button onclick="addProduto()">Salvar</button>
-<select id="produtos"></select>
-</div>
+<select id="listaProdutos"></select>
 </div>
 
-<div id="movTela" class="tela" style="display:none">
-<div class="card">
-<input id="qtd" type="number">
-<button onclick="entrada()">Entrada</button>
-<button onclick="saida()">Saída</button>
-<button onclick="window.print()">Imprimir</button>
-</div>
 </div>
 
 </div>
@@ -245,73 +198,78 @@ img { width:50px; border-radius:5px; }
 <script>
 let token="";
 
-function show(t){
-    document.querySelectorAll(".tela").forEach(x=>x.style.display="none");
-    document.getElementById(t+"Tela").style.display="block";
+function mostrarTela(nome){
+    document.querySelectorAll(".tela").forEach(t=>t.style.display="none");
+    document.getElementById(nome).style.display="block";
 }
 
-async function login(){
-    let res = await fetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({email:email.value,senha:senha.value})});
-    let data = await res.json();
-    token=data.token;
-    if(token){ login.style.display="none"; app.style.display="block"; load(); }
+async function fazerLogin(){
+    const res = await fetch("/login", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            email:document.getElementById("email").value,
+            senha:document.getElementById("senha").value
+        })
+    });
+
+    const data = await res.json();
+
+    if(data.token){
+        token = data.token;
+        document.getElementById("loginBox").style.display="none";
+        document.getElementById("app").style.display="block";
+        carregarDados();
+    } else {
+        document.getElementById("erro").innerText = data.erro;
+    }
 }
 
-async function load(){
-    let d = await fetch("/dashboard",{headers:{authorization:token}});
-    let data = await d.json();
+async function carregarDados(){
+    const res = await fetch("/dashboard", { headers:{authorization:token}});
+    const data = await res.json();
 
-    c.innerText = data.totalClientes;
-    p.innerText = data.totalProdutos;
-
-    new Chart(grafico,{
+    new Chart(document.getElementById("grafico"), {
         type:"bar",
         data:{
-            labels:data.produtos.map(x=>x.nome),
-            datasets:[{label:"Estoque",data:data.produtos.map(x=>x.quantidade)}]
+            labels:data.produtos.map(p=>p.nome),
+            datasets:[{label:"Estoque", data:data.produtos.map(p=>p.quantidade)}]
         }
     });
 
-    let cli = await fetch("/clientes",{headers:{authorization:token}});
-    let cl = await cli.json();
-    cl.forEach(x=>clientes.innerHTML+=\`<option value="\${x.id}">\${x.nome}</option>\`);
+    let clientes = await fetch("/clientes",{headers:{authorization:token}});
+    let cl = await clientes.json();
+    let sel = document.getElementById("listaClientes");
+    sel.innerHTML="";
+    cl.forEach(c=>{
+        sel.innerHTML += \`<option>\${c.nome}</option>\`;
+    });
 
-    let pr = await fetch("/produtos",{headers:{authorization:token}});
-    let pl = await pr.json();
-    pl.forEach(x=>produtos.innerHTML+=\`<option value="\${x.id}">\${x.nome}</option>\`);
-}
-
-function fileBase64(input){
-    return new Promise(r=>{
-        let reader=new FileReader();
-        reader.onload=()=>r(reader.result);
-        reader.readAsDataURL(input.files[0]);
+    let produtos = await fetch("/produtos",{headers:{authorization:token}});
+    let pr = await produtos.json();
+    let sel2 = document.getElementById("listaProdutos");
+    sel2.innerHTML="";
+    pr.forEach(p=>{
+        sel2.innerHTML += \`<option>\${p.nome}</option>\`;
     });
 }
 
 async function addCliente(){
-    let foto = await fileBase64(cfoto);
-    await fetch("/clientes",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({nome:cnome.value,cpf:ccpf.value,foto})});
-    location.reload();
+    await fetch("/clientes",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({nome:cnome.value,cpf:ccpf.value})
+    });
+    carregarDados();
 }
 
 async function addProduto(){
-    let foto = await fileBase64(pfoto);
-    await fetch("/produtos",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value,foto})});
-    location.reload();
-}
-
-function entrada(){
-    fetch("/entrada",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({produto_id:produtos.value,quantidade:qtd.value})});
-}
-
-function saida(){
-    fetch("/saida",{method:"POST",headers:{authorization:token,"Content-Type":"application/json"},
-    body:JSON.stringify({cliente_id:clientes.value,produto_id:produtos.value,quantidade:qtd.value})});
+    await fetch("/produtos",{
+        method:"POST",
+        headers:{authorization:token,"Content-Type":"application/json"},
+        body:JSON.stringify({nome:pnome.value,quantidade:pqtd.value})
+    });
+    carregarDados();
 }
 </script>
 
@@ -320,4 +278,4 @@ function saida(){
 `);
 });
 
-app.listen(3000, () => console.log("🚀 Rodando em http://localhost:3000"));
+app.listen(3000, () => console.log("🚀 http://localhost:3000"));
